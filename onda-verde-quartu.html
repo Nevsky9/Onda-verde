@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Onda Verde Quartu</title>
+<meta name="theme-color" content="#10151b">
+<meta name="description" content="Assistente indicativo per semafori e misurazioni a Quartu Sant’Elena.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+/* Layout: mappa a tutto schermo, pannello di guida in basso con colore, conto alla rovescia e velocità consigliata. */
+:root{
+  --bg:#10151b; --panel:#182028; --line:#26313c; --fg:#e9eef3; --muted:#8a97a5;
+  --g:#3ddc84; --y:#f6c445; --r:#ff5b52; --off:#59636e; --accent:#4cc3ff;
+  --sys:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 var(--sys);overscroll-behavior:none}
+html{touch-action:manipulation}
+body{display:flex;flex-direction:column;padding-left:env(safe-area-inset-left,0);padding-right:env(safe-area-inset-right,0)}
+button,.chip{-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;user-select:none}
+#map{flex:1;min-height:0;background:#0b0f14}
+.leaflet-tile{filter:brightness(.85) saturate(.85)}
+#top{position:absolute;z-index:500;top:max(8px,env(safe-area-inset-top,0px));left:8px;right:8px;display:flex;gap:8px;justify-content:space-between;pointer-events:none}
+#top>*{pointer-events:auto}
+.chip{background:var(--panel);border:1px solid var(--line);color:var(--fg);border-radius:999px;padding:10px 14px;font:600 13px var(--sys);min-height:38px;display:inline-flex;align-items:center}
+button.chip{cursor:pointer}
+#panel{background:var(--panel);border-top:1px solid var(--line);padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:auto 1fr;gap:4px 16px;align-items:center}
+#lamp{width:92px;height:92px;border-radius:50%;background:var(--off);display:grid;place-items:center;font:700 34px var(--sys);color:#08110c;font-variant-numeric:tabular-nums;transition:background .2s;grid-row:span 2}
+#lamp small{font-size:13px;font-weight:600;display:block;text-align:center;margin-top:-4px}
+#lamp.g{background:var(--g)} #lamp.y{background:var(--y)} #lamp.r{background:var(--r);color:#1b0604}
+#name{font-weight:700;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#dist{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+#advice{grid-column:1/-1;margin-top:6px;font-size:17px;font-weight:600;min-height:28px}
+#advice b{font-size:26px;font-variant-numeric:tabular-nums}
+#advice.ok{color:var(--g)} #advice.stop{color:var(--r)} #advice.unk{color:var(--muted);font-weight:500;font-size:15px}
+.row{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.btn{flex:1;min-width:120px;min-height:48px;background:#223040;border:1px solid var(--line);color:var(--fg);border-radius:12px;padding:12px;font:600 15px var(--sys);cursor:pointer}
+.btn.pri{background:var(--accent);color:#04202e;border-color:transparent}
+.btn:focus-visible,.chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#sim{grid-column:1/-1;display:none;gap:10px;align-items:center;color:var(--muted);font-size:13px}
+#sim.on{display:flex} #sim input{flex:1}
+dialog{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:14px;padding:18px;width:min(92vw,420px)}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+dialog h2{margin:0 0 6px;font-size:18px}
+dialog p{margin:6px 0;color:var(--muted);font-size:13px}
+#calbtn{width:100%;margin:12px 0;padding:22px 12px;font-size:18px}
+#calres{font-variant-numeric:tabular-nums;color:var(--fg);font-size:14px;min-height:20px}
+label.f{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0;font-size:14px}
+label.f input[type=number]{width:84px;background:#0f151b;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:7px}
+.tl{position:relative;width:22px;height:46px;filter:drop-shadow(0 2px 2px rgba(0,0,0,.5));transition:outline-color .15s}
+.tl.ghost{opacity:.65}
+.tl.sel{outline:3px solid var(--accent);outline-offset:3px;border-radius:10px}
+.tl .t{display:none;position:absolute;top:-17px;left:50%;transform:translateX(-50%);font:800 11px/1 var(--sys);font-variant-numeric:tabular-nums;color:#0b0f14;background:var(--off);padding:3px 6px;border-radius:7px;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.5)}
+.tl .t.show{display:block}
+.tl .t.lr{background:var(--r)}
+.tl .t.ly{background:var(--y)}
+.tl .t.lg{background:var(--g)}
+.tl circle{fill:#121820;stroke:rgba(255,255,255,.08);stroke-width:1;transition:fill .2s,filter .2s}
+.tl circle.lit{filter:drop-shadow(0 0 4px currentColor)}
+.tl circle.lr.lit{fill:var(--r);color:var(--r)}
+.tl circle.ly.lit{fill:var(--y);color:var(--y)}
+.tl circle.lg.lit{fill:var(--g);color:var(--g)}
+.me{width:16px;height:16px;border-radius:50%;background:var(--accent);border:3px solid #fff;box-shadow:0 0 0 6px rgba(76,195,255,.25)}
+@media (prefers-reduced-motion:reduce){#lamp{transition:none}}
+
+/* Migliorie: controlli accessibili, filtri e stato dati */
+#extras{position:absolute;z-index:500;top:56px;left:8px;right:8px;display:flex;gap:6px;flex-wrap:wrap;pointer-events:none}
+#extras>*{pointer-events:auto}
+#extras .chip{padding:8px 11px;min-height:34px}
+#quality{font-size:12px;color:var(--muted);margin-top:4px}
+#filters{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;grid-column:1/-1}
+#filters button.active{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:420px){#lamp{width:78px;height:78px;font-size:29px}#panel{gap:4px 12px;padding-left:12px;padding-right:12px}#advice{font-size:15px}#advice b{font-size:23px}}
+</style>
+</head>
+<body>
+<div id="map" aria-label="Mappa dei semafori"></div>
+<div id="top">
+  <span class="chip" id="status">Avvio…</span>
+  <button class="chip" id="addHereChip" type="button" hidden>Usa qui</button>
+  <button class="chip" id="modeBtn" type="button">Simulazione</button>
+</div>
+<div id="extras" aria-label="Controlli rapidi">
+  <button class="chip" id="filterAll" type="button">Tutti</button>
+  <button class="chip" id="filterMeasured" type="button">Misurati</button>
+  <button class="chip" id="filterUnmeasured" type="button">Da misurare</button>
+  <button class="chip" id="voiceBtn" type="button" aria-pressed="false">Voce: no</button>
+  <button class="chip" id="routeBtn" type="button">Percorso</button>
+</div>
+
+<section id="panel" aria-live="polite">
+  <div id="lamp" aria-label="Stato del semaforo">–</div>
+  <div><div id="name">Nessun semaforo vicino</div><div id="dist">In attesa della posizione</div><div id="quality">Le previsioni sono indicative.</div></div>
+  <div id="sim"><span>Velocità</span><input id="simv" type="range" min="0" max="60" value="40"><span id="simvl">40 km/h</span></div>
+  <div id="advice" class="unk">Avvicinati a un semaforo per vedere il consiglio. Non interagire con l’app mentre guidi.</div>
+  <div class="row">
+    <button class="btn pri" id="calOpen" type="button">Misura questo semaforo</button>
+  </div>
+  <div class="row">
+    <button class="btn" id="addOpen" type="button">Aggiungi semaforo</button>
+    <button class="btn" id="setOpen" type="button">Dati e impostazioni</button>
+  </div>
+</section>
+
+<dialog id="addDlg">
+  <h2>Aggiungi semaforo</h2>
+  <p id="addHint">Punto scelto</p>
+  <label class="f">Nome<input id="addName" type="text" placeholder="es. Via Cagliari / Via Roma" style="flex:1;width:auto;text-align:left"></label>
+  <div class="row">
+    <button class="btn pri" id="addSave" type="button">Salva semaforo</button>
+    <button class="btn" id="addCancel" type="button">Annulla</button>
+  </div>
+</dialog>
+
+<dialog id="calDlg">
+  <h2 id="calTitle">Misura il semaforo</h2>
+  <p>Resta fermo in un punto sicuro, mai alla guida. Premi il pulsante nel momento esatto in cui cambia la luce. Servono 4 pressioni per un ciclo completo.</p>
+  <button class="btn pri" id="calbtn" type="button">È scattato il VERDE</button>
+  <div id="calres"></div>
+  <div class="row"><button class="btn" id="calReset" type="button">Ricomincia</button><button class="btn" id="calClose" type="button">Chiudi</button></div>
+</dialog>
+
+<dialog id="setDlg">
+  <h2>Dati e impostazioni</h2>
+  <label class="f">Limite di velocità (km/h)<input id="limit" type="number" min="20" max="90" value="50"></label>
+  <p id="count"></p>
+  <div class="row">
+    <button class="btn" id="reload" type="button">Scarica semafori da OpenStreetMap</button>
+    <button class="btn" id="exp" type="button">Esporta misure</button>
+    <button class="btn" id="imp" type="button">Importa misure</button>
+    <button class="btn" id="unpin" type="button">Selezione automatica</button>
+  </div>
+  <input type="file" id="file" accept="application/json" hidden>
+  <div class="row"><button class="btn" id="deleteSelected" type="button">Elimina semaforo selezionato</button></div>
+  <div class="row"><button class="btn" id="setClose" type="button">Chiudi</button></div>
+</dialog>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// Calcoli puri: stato del semaforo e velocità consigliata.
+// Un semaforo ha: G, Y, R (secondi) e t0 (istante in ms di un inizio del verde).
+(function (root) {
+  function cycle(s) {
+    return s && s.G > 0 && s.Y > 0 && s.R > 0 && s.t0 != null ? s.G + s.Y + s.R : 0;
+  }
+
+  // Colore e secondi mancanti al prossimo cambio, all'istante tms (ms).
+  function stateAt(s, tms) {
+    var C = cycle(s);
+    if (!C) return null;
+    var p = (((tms - s.t0) / 1000) % C + C) % C;
+    if (p < s.G) return { c: 'g', left: s.G - p };
+    if (p < s.G + s.Y) return { c: 'y', left: s.G + s.Y - p };
+    return { c: 'r', left: C - p };
+  }
+
+  // d: metri al semaforo, vmax e vmin in m/s.
+  // Cerca l'arrivo più rapido possibile che cada dentro una finestra di verde,
+  // con 1 s di margine all'inizio e 2 s alla fine. Restituisce la velocità in m/s.
+  function advise(d, tms, s, vmax, vmin) {
+    var C = cycle(s);
+    if (!C || d <= 0) return { ok: false };
+    var Tmin = d / vmax, Tmax = d / vmin;
+    var t0s = s.t0 / 1000, nows = tms / 1000;
+    var k0 = Math.floor((nows - t0s) / C) - 1;
+    var n = Math.ceil(Tmax / C) + 3;
+    for (var k = k0; k < k0 + n; k++) {
+      var a = t0s + k * C - nows;
+      var b = a + s.G;
+      var lo = Math.max(Tmin, a + 1);
+      var hi = Math.min(Tmax, b - 2);
+      if (lo <= hi) return { ok: true, v: d / lo, T: lo, free: lo === Tmin };
+    }
+    return { ok: false };
+  }
+
+  function haversine(a, b) {
+    var R = 6371000, r = Math.PI / 180;
+    var dLat = (b.lat - a.lat) * r, dLon = (b.lon - a.lon) * r;
+    var x = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return 2 * R * Math.asin(Math.sqrt(x));
+  }
+
+  function bearing(a, b) {
+    var r = Math.PI / 180;
+    var y = Math.sin((b.lon - a.lon) * r) * Math.cos(b.lat * r);
+    var x = Math.cos(a.lat * r) * Math.sin(b.lat * r) -
+      Math.sin(a.lat * r) * Math.cos(b.lat * r) * Math.cos((b.lon - a.lon) * r);
+    return (Math.atan2(y, x) / r + 360) % 360;
+  }
+
+  function angDiff(a, b) {
+    var d = Math.abs(a - b) % 360;
+    return d > 180 ? 360 - d : d;
+  }
+
+  // Unisce i nodi OSM vicini (spesso un incrocio ha un nodo per ogni senso di marcia).
+  function mergeNear(points, meters) {
+    var out = [];
+    points.forEach(function (p) {
+      for (var i = 0; i < out.length; i++) {
+        if (haversine(out[i], p) < meters) return;
+      }
+      out.push(p);
+    });
+    return out;
+  }
+
+  // Ricava G, Y, R, t0 da 4 istanti (ms): verde, giallo, rosso, verde successivo.
+  function fromTaps(t) {
+    if (t.length < 4) return null;
+    var G = Math.round((t[1] - t[0]) / 1000);
+    var Y = Math.round((t[2] - t[1]) / 1000);
+    var R = Math.round((t[3] - t[2]) / 1000);
+    if (G < 3 || Y < 1 || R < 3 || G > 300 || Y > 15 || R > 300) return null;
+    return { G: G, Y: Y, R: R, t0: t[0] };
+  }
+
+  var api = { cycle: cycle, stateAt: stateAt, advise: advise, haversine: haversine,
+    bearing: bearing, angDiff: angDiff, mergeNear: mergeNear, fromTaps: fromTaps };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.OV = api;
+})(typeof window !== 'undefined' ? window : this);
+
+</script>
+<script>
+(function () {
+  var OV = window.OV;
+  var $ = function (id) { return document.getElementById(id); };
+  var LS = 'ov.signals.v1', LS_SET = 'ov.settings.v1';
+
+  // ---- stato ----
+  var signals = load(LS, []);
+  var settings = load(LS_SET, { limit: 50 });
+  var pinned = null;
+  var useSim = false;
+  var gps = null; // {lat, lon, speed, heading, t}
+  var lastFix = null;
+  var sim = { x: -600, v: 40 };
+  var DEMO = { id: 'demo', demo: true, name: 'Semaforo di prova', lat: 39.2297, lon: 9.1836, G: 30, Y: 3, R: 37, t0: 0 };
+  var cal = { id: null, taps: [] };
+  var follow = true;
+  var lastCenter = null;
+  var addMode = false;
+  var pendingLatLng = null;
+  var filterMode = 'all';
+  var voiceEnabled = false;
+  var lastVoiceMessage = '';
+  var routeLayer = null;
+
+  // Vibrazione breve di conferma, per capire che un'azione è andata a buon fine
+  // senza dover guardare lo schermo. Non tutti i telefoni la supportano.
+  function buzz(ms) { try { if (navigator.vibrate) navigator.vibrate(ms || 12); } catch (e) {} }
+
+  // Tocco fuori dal contenuto (sullo sfondo scuro) chiude la finestra, comodo sul telefono.
+  ['addDlg', 'calDlg', 'setDlg'].forEach(function (id) {
+    var d = document.getElementById(id);
+    d.addEventListener('click', function (e) { if (e.target === d) d.close(); });
+  });
+
+  function load(k, d) { try { var v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch (e) { return d; } }
+  function save() { try { localStorage.setItem(LS, JSON.stringify(signals)); localStorage.setItem(LS_SET, JSON.stringify(settings)); } catch (e) {} }
+
+  function visible() {
+    return signals.filter(function (s) {
+      if (useSim ? !s.demo : s.demo) return false;
+      if (filterMode === 'measured') return !!OV.cycle(s);
+      if (filterMode === 'unmeasured') return !OV.cycle(s);
+      return true;
+    });
+  }
+  if (!signals.some(function (s) { return s.demo; })) signals.push(DEMO);
+
+  // ---- mappa ----
+  var map = L.map('map', { zoomControl: false, attributionControl: true }).setView([39.2297, 9.1836], 15);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  map.on('dragstart', function () { follow = false; });
+  map.on('click', function (e) {
+    if (!addMode) return;
+    startAddAt(e.latlng.lat, e.latlng.lng);
+  });
+  var markers = {};
+  var preview = null;
+  var me = L.marker([39.2297, 9.1836], { icon: L.divIcon({ className: '', html: '<div class="me"></div>', iconSize: [16, 16] }), zIndexOffset: 1000 }).addTo(map);
+
+  // Icona a forma di vero semaforo: custodia scura con tre luci,
+  // quella accesa prende il colore della fase e un leggero bagliore.
+  function trafficIconHtml(ghost) {
+    return '<div class="tl' + (ghost ? ' ghost' : '') + '">' +
+      '<div class="t"></div>' +
+      '<svg width="22" height="46" viewBox="0 0 22 46" aria-hidden="true">' +
+      '<rect x="7" y="30" width="8" height="14" rx="2" fill="#3a4350"/>' +
+      '<rect x="1" y="1" width="20" height="32" rx="6" fill="#20272f" stroke="#0b0f14" stroke-width="2"/>' +
+      '<circle class="lr" cx="11" cy="10" r="5.5"/>' +
+      '<circle class="ly" cx="11" cy="17.3" r="5.5"/>' +
+      '<circle class="lg" cx="11" cy="24.6" r="5.5"/>' +
+      '</svg></div>';
+  }
+  function trafficIcon(ghost) {
+    return L.divIcon({ className: '', html: trafficIconHtml(ghost), iconSize: [22, 46], iconAnchor: [11, 44] });
+  }
+
+  function syncMarkers() {
+    var vis = visible(), ids = {};
+    vis.forEach(function (s) {
+      ids[s.id] = 1;
+      if (!markers[s.id]) {
+        var m = L.marker([s.lat, s.lon], { icon: trafficIcon(false) }).addTo(map);
+        m.bindPopup('');
+        m.on('click', function () {
+          buzz(10);
+          pinned = s.id; follow = false;
+          var popup = document.createElement('div');
+          var title = document.createElement('strong'); title.textContent = s.name || 'Semaforo'; popup.appendChild(title);
+          popup.appendChild(document.createElement('br'));
+          popup.appendChild(document.createTextNode(OV.cycle(s) ? 'Ciclo misurato' : 'Ciclo non ancora misurato'));
+          popup.appendChild(document.createElement('br'));
+          var small = document.createElement('small'); small.textContent = 'Selezionato come riferimento'; popup.appendChild(small);
+          m.setPopupContent(popup).openPopup();
+          tick();
+        });
+        markers[s.id] = m;
+      }
+    });
+    Object.keys(markers).forEach(function (id) {
+      if (!ids[id]) { map.removeLayer(markers[id]); delete markers[id]; }
+    });
+  }
+
+  function paintMarkers(now) {
+    visible().forEach(function (s) {
+      var m = markers[s.id]; if (!m) return;
+      var st = OV.stateAt(s, now);
+      var el = m.getElement(); if (!el) return;
+      var wrap = el.firstChild;
+      wrap.classList.toggle('sel', pinned === s.id);
+      ['lr', 'ly', 'lg'].forEach(function (cls) {
+        var lamp = wrap.querySelector('.' + cls);
+        lamp.classList.toggle('lit', !!st && cls === 'l' + st.c);
+      });
+      var badge = wrap.querySelector('.t');
+      badge.className = 't' + (st ? ' show l' + st.c : '');
+      badge.textContent = st ? Math.ceil(st.left) + 's' : '';
+    });
+  }
+
+  // ---- posizione ----
+  function startGps() {
+    if (!navigator.geolocation) { $('status').textContent = 'GPS non disponibile'; return; }
+    navigator.geolocation.watchPosition(function (p) {
+      var c = p.coords, cur = { lat: c.latitude, lon: c.longitude, t: Date.now() };
+      var heading = (c.heading != null && !isNaN(c.heading)) ? c.heading : null;
+      if (heading == null && lastFix && OV.haversine(lastFix, cur) > 6) heading = OV.bearing(lastFix, cur);
+      if (!lastFix || OV.haversine(lastFix, cur) > 6) lastFix = cur;
+      cur.speed = (c.speed != null && !isNaN(c.speed)) ? c.speed : null;
+      cur.heading = heading;
+      gps = cur;
+      $('status').textContent = 'GPS ±' + Math.round(c.accuracy) + ' m';
+    }, function (e) {
+      $('status').textContent = e.code === 1 ? 'Permesso GPS negato' : 'GPS non disponibile';
+    }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 });
+  }
+
+  function position(dt) {
+    if (useSim) {
+      sim.x += sim.v / 3.6 * dt;
+      if (sim.x > 40) sim.x = -600;
+      var lon = DEMO.lon + sim.x / (111320 * Math.cos(DEMO.lat * Math.PI / 180));
+      return { lat: DEMO.lat, lon: lon, speed: sim.v / 3.6, heading: 90 };
+    }
+    return gps;
+  }
+
+  // ---- scelta del semaforo ----
+  function pickTarget(pos) {
+    if (pinned) {
+      var p = signals.find(function (s) { return s.id === pinned; });
+      if (p && (useSim ? p.demo : !p.demo)) return p;
+    }
+    var c = visible().map(function (s) { return { s: s, d: OV.haversine(pos, s), b: OV.bearing(pos, s) }; })
+      .filter(function (o) { return o.d < 600; });
+    if (!c.length) return null;
+    if (pos.heading != null) {
+      var ahead = c.filter(function (o) { return o.d < 30 || OV.angDiff(o.b, pos.heading) < 50; });
+      if (ahead.length) c = ahead;
+    }
+    c.sort(function (a, b) { return a.d - b.d; });
+    return c[0].s;
+  }
+
+  // ---- pannello ----
+  var lamp = $('lamp'), adv = $('advice');
+  var prev = Date.now();
+
+  function tick() {
+    var now = Date.now(), dt = Math.min(2, (now - prev) / 1000); prev = now;
+    syncMarkers();
+    paintMarkers(now);
+    var pos = position(dt);
+    if (!pos) { render(null, null, now); return; }
+    me.setLatLng([pos.lat, pos.lon]);
+    if (follow && (!lastCenter || OV.haversine(lastCenter, pos) > 15)) {
+      map.setView([pos.lat, pos.lon], Math.max(map.getZoom(), 16), { animate: false });
+      lastCenter = { lat: pos.lat, lon: pos.lon };
+    }
+    var s = pickTarget(pos);
+    render(s, pos, now);
+  }
+
+  function render(s, pos, now) {
+    lamp.className = ''; lamp.textContent = '–';
+    if (!pos) { $('name').textContent = 'Nessuna posizione'; $('dist').textContent = 'Attendi il segnale GPS o usa la simulazione'; setAdv('unk', 'In attesa della posizione.'); return; }
+    if (!s) { $('name').textContent = 'Nessun semaforo vicino'; $('dist').textContent = 'Entro 600 m non risultano semafori'; setAdv('unk', 'Nessun semaforo davanti a te.'); return; }
+    var d = OV.haversine(pos, s);
+    $('name').textContent = s.name || 'Semaforo';
+    $('dist').textContent = Math.round(d) + ' m' + (pinned === s.id ? ' · selezionato' : '');
+    var st = OV.stateAt(s, now);
+    var measuredAt = s.measured || 0;
+    var ageDays = measuredAt ? Math.floor((now - measuredAt) / 86400000) : null;
+    if (!OV.cycle(s)) $('quality').textContent = 'Ciclo non misurato: nessuna previsione disponibile.';
+    else if (ageDays === null) $('quality').textContent = 'Ciclo importato senza data: affidabilità non verificabile.';
+    else if (ageDays > 7) $('quality').textContent = 'Misura vecchia di ' + ageDays + ' giorni: previsione disattivata.';
+    else $('quality').textContent = 'Misura aggiornata ' + (ageDays === 0 ? 'oggi' : ageDays + ' giorni fa') + '. Previsione indicativa.';
+    if (!st || !OV.cycle(s) || (!s.demo && ageDays === null) || (ageDays !== null && ageDays > 7)) { lamp.className = ''; lamp.textContent = '–'; setAdv('unk', 'Ciclo non affidabile o non misurato. Non basarti su questa previsione.'); return; }
+    lamp.className = st.c;
+    lamp.innerHTML = Math.ceil(st.left) + '<small>' + ({ g: 'verde', y: 'giallo', r: 'rosso' })[st.c] + '</small>';
+    var vmax = settings.limit / 3.6, vmin = 15 / 3.6;
+    if (d < 25) { setAdv('unk', 'Sei sul semaforo.'); return; }
+    var a = OV.advise(d, now, s, vmax, vmin);
+    if (!a.ok) { setAdv('stop', 'Rosso all’arrivo. Rallenta e fermati con calma.'); return; }
+    var kmh = Math.round(a.v * 3.6);
+    if (a.free) setAdv('ok', 'Verde all’arrivo. Puoi mantenere <b>' + Math.min(kmh, settings.limit) + '</b> km/h al massimo.');
+    else setAdv('ok', 'Vai a <b>' + kmh + '</b> km/h per trovare il verde.');
+  }
+
+  function setAdv(cls, html) {
+    adv.className = cls; adv.innerHTML = html;
+    if (voiceEnabled && 'speechSynthesis' in window) {
+      var plain = adv.textContent || '';
+      if (plain && plain !== lastVoiceMessage) {
+        lastVoiceMessage = plain;
+        window.speechSynthesis.cancel();
+        var utterance = new SpeechSynthesisUtterance(plain);
+        utterance.lang = 'it-IT'; utterance.rate = 1.05;
+        window.speechSynthesis.speak(utterance);
+      }
+    }
+  }
+
+  // ---- misura del ciclo ----
+  var STEPS = ['È scattato il VERDE', 'È scattato il GIALLO', 'È scattato il ROSSO', 'È scattato di nuovo il VERDE'];
+  function openCal() {
+    var pos = position(0), s = pos ? pickTarget(pos) : null;
+    if (!s) { alert_('Avvicinati a un semaforo o toccalo sulla mappa.'); return; }
+    cal = { id: s.id, taps: [] };
+    $('calTitle').textContent = s.name || 'Semaforo';
+    refreshCal();
+    $('calDlg').showModal();
+  }
+  function alert_(msg) { $('status').textContent = msg; }
+  function refreshCal() {
+    var n = cal.taps.length;
+    $('calbtn').textContent = STEPS[Math.min(n, 3)];
+    $('calres').textContent = n ? ('Registrati ' + n + ' di 4') : '';
+  }
+  function tap() {
+    buzz(15);
+    cal.taps.push(Date.now());
+    if (cal.taps.length < 4) { refreshCal(); return; }
+    var r = OV.fromTaps(cal.taps);
+    if (!r) { $('calres').textContent = 'Misura non valida. Ricomincia premendo ai cambi di luce.'; cal.taps = []; $('calbtn').textContent = STEPS[0]; return; }
+    var s = signals.find(function (x) { return x.id === cal.id; });
+    s.G = r.G; s.Y = r.Y; s.R = r.R; s.t0 = r.t0; s.measured = Date.now();
+    save();
+    $('calres').textContent = 'Salvato: verde ' + r.G + ' s, giallo ' + r.Y + ' s, rosso ' + r.R + ' s (ciclo ' + (r.G + r.Y + r.R) + ' s)';
+    cal.taps = [];
+    $('calbtn').textContent = STEPS[0];
+  }
+
+  // ---- aggiungi semaforo a mano ----
+  // La finestra si apre SOLO dopo aver scelto il punto: se fosse aperta prima,
+  // bloccherebbe ogni tocco sulla mappa (una <dialog> modale copre tutto il resto).
+  function exitAddMode() {
+    addMode = false;
+    $('addOpen').textContent = 'Aggiungi semaforo';
+    $('addHereChip').hidden = true;
+    $('status').textContent = useSim ? 'Simulazione' : (gps ? 'GPS attivo' : 'In attesa del GPS');
+  }
+  function startAddAt(lat, lon) {
+    exitAddMode();
+    pendingLatLng = { lat: lat, lon: lon };
+    if (preview) map.removeLayer(preview);
+    preview = L.marker([lat, lon], { icon: trafficIcon(true), zIndexOffset: 900 }).addTo(map);
+    $('addName').value = '';
+    $('addHint').textContent = 'Punto scelto: ' + lat.toFixed(5) + ', ' + lon.toFixed(5);
+    $('addDlg').showModal();
+    $('addName').focus();
+  }
+  function clearPreview() { if (preview) { map.removeLayer(preview); preview = null; } }
+
+  // ---- OpenStreetMap ----
+  var QUERY = '[out:json][timeout:60];area["boundary"="administrative"]["name"="Quartu Sant\'Elena"]->.a;node["highway"="traffic_signals"](area.a);out;';
+  function overpass(q) {
+    return fetch('https://overpass-api.de/api/interpreter', { method: 'POST', body: 'data=' + encodeURIComponent(q) })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); });
+  }
+  function importOsm() {
+    $('count').textContent = 'Scarico i semafori…';
+    return overpass(QUERY).then(function (j) {
+      var pts = OV.mergeNear(j.elements.map(function (e) { return { id: 'osm-' + e.id, lat: e.lat, lon: e.lon, name: (e.tags && e.tags.name) || null }; }), 25);
+      var known = {};
+      signals.forEach(function (s) { known[s.id] = s; });
+      var added = 0;
+      pts.forEach(function (p) {
+        if (known[p.id]) return;
+        signals.push({ id: p.id, lat: p.lat, lon: p.lon, name: p.name || ('Semaforo ' + (signals.length)), G: 0, Y: 0, R: 0, t0: null });
+        added++;
+      });
+      save(); updateCount();
+      $('status').textContent = 'Semafori caricati: ' + pts.length;
+    }).catch(function () { $('count').textContent = 'Download non riuscito. Controlla la connessione e riprova.'; });
+  }
+  function updateCount() {
+    var real = signals.filter(function (s) { return !s.demo; });
+    var meas = real.filter(function (s) { return OV.cycle(s); }).length;
+    $('count').textContent = real.length + ' semafori caricati, ' + meas + ' con ciclo misurato.';
+  }
+
+  // ---- strumenti aggiuntivi ----
+  function refreshFilterButtons() {
+    [['filterAll','all'],['filterMeasured','measured'],['filterUnmeasured','unmeasured']].forEach(function (x) {
+      var b = $(x[0]); b.classList.toggle('active', filterMode === x[1]);
+      b.setAttribute('aria-pressed', filterMode === x[1] ? 'true' : 'false');
+    });
+    syncMarkers(); tick();
+  }
+  $('filterAll').onclick = function () { filterMode = 'all'; refreshFilterButtons(); };
+  $('filterMeasured').onclick = function () { filterMode = 'measured'; refreshFilterButtons(); };
+  $('filterUnmeasured').onclick = function () { filterMode = 'unmeasured'; refreshFilterButtons(); };
+  $('voiceBtn').onclick = function () {
+    voiceEnabled = !voiceEnabled;
+    $('voiceBtn').textContent = voiceEnabled ? 'Voce: sì' : 'Voce: no';
+    $('voiceBtn').setAttribute('aria-pressed', voiceEnabled ? 'true' : 'false');
+    if (!voiceEnabled && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+    else if (voiceEnabled && 'speechSynthesis' in window) {
+      var u = new SpeechSynthesisUtterance('Avvisi vocali attivati. Usa l’app solo quando è sicuro.'); u.lang = 'it-IT'; window.speechSynthesis.speak(u);
+    }
+  };
+  $('deleteSelected').onclick = function () {
+    if (!pinned) { $('count').textContent = 'Seleziona prima un semaforo dalla mappa.'; return; }
+    var target = signals.find(function (s) { return s.id === pinned; });
+    if (!target || target.demo) { $('count').textContent = 'Il semaforo di prova non può essere eliminato.'; return; }
+    if (!window.confirm('Eliminare "' + (target.name || 'Semaforo') + '"?')) return;
+    signals = signals.filter(function (s) { return s.id !== pinned; });
+    if (markers[pinned]) { map.removeLayer(markers[pinned]); delete markers[pinned]; }
+    pinned = null; save(); updateCount(); syncMarkers(); tick();
+    $('count').textContent = 'Semaforo eliminato.';
+  };
+  $('routeBtn').onclick = function () {
+    if (!gps) { alert_('Attendi il GPS prima di pianificare il percorso.'); return; }
+    var destination = window.prompt('Inserisci la destinazione (indirizzo o luogo):');
+    if (!destination || !destination.trim()) return;
+    $('status').textContent = 'Calcolo percorso…';
+    fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=' + encodeURIComponent(destination.trim()))
+      .then(function (r) { if (!r.ok) throw new Error('geocoding'); return r.json(); })
+      .then(function (places) {
+        if (!places.length) throw new Error('destinazione');
+        var dest = places[0];
+        var url = 'https://router.project-osrm.org/route/v1/driving/' + gps.lon + ',' + gps.lat + ';' + dest.lon + ',' + dest.lat + '?overview=full&geometries=geojson';
+        return fetch(url).then(function (r) { if (!r.ok) throw new Error('route'); return r.json(); });
+      }).then(function (data) {
+        if (!data.routes || !data.routes.length) throw new Error('route');
+        if (routeLayer) map.removeLayer(routeLayer);
+        routeLayer = L.geoJSON(data.routes[0].geometry, { style: { color: '#4cc3ff', weight: 5, opacity: .85 } }).addTo(map);
+        map.fitBounds(routeLayer.getBounds(), { padding: [30, 30] });
+        var km = data.routes[0].distance / 1000, mins = data.routes[0].duration / 60;
+        $('status').textContent = 'Percorso: ' + km.toFixed(1) + ' km · circa ' + Math.round(mins) + ' min';
+      }).catch(function () { $('status').textContent = 'Percorso non disponibile. Controlla connessione e destinazione.'; });
+  };
+
+  // ---- interfaccia ----
+  $('calOpen').onclick = openCal;
+  $('calbtn').onclick = tap;
+  $('calReset').onclick = function () { cal.taps = []; refreshCal(); };
+  $('calClose').onclick = function () { $('calDlg').close(); };
+  $('setOpen').onclick = function () { updateCount(); $('limit').value = settings.limit; $('setDlg').showModal(); };
+  $('setClose').onclick = function () { $('setDlg').close(); };
+  $('limit').onchange = function () { var v = parseInt($('limit').value, 10); if (v >= 20 && v <= 90) { settings.limit = v; save(); } };
+  $('reload').onclick = importOsm;
+  $('addOpen').onclick = function () {
+    if (addMode) { exitAddMode(); return; }
+    addMode = true; follow = false;
+    $('addOpen').textContent = 'Annulla aggiunta';
+    $('addHereChip').hidden = false;
+    $('status').textContent = 'Tocca la mappa nel punto del semaforo';
+  };
+  $('addHereChip').onclick = function () {
+    var pos = position(0);
+    if (!pos) { $('status').textContent = 'Posizione non ancora disponibile'; return; }
+    startAddAt(pos.lat, pos.lon);
+  };
+  $('addSave').onclick = function () {
+    if (!pendingLatLng) return;
+    buzz(20);
+    var name = $('addName').value.trim() || 'Semaforo aggiunto';
+    var id = 'manual-' + Date.now();
+    signals.push({ id: id, lat: pendingLatLng.lat, lon: pendingLatLng.lon, name: name, G: 0, Y: 0, R: 0, t0: null });
+    pinned = id; // selezionato subito come riferimento, così "Misura questo semaforo" punta a lui
+    save(); syncMarkers(); updateCount();
+    pendingLatLng = null;
+    clearPreview();
+    $('addDlg').close();
+  };
+  $('addCancel').onclick = function () { pendingLatLng = null; clearPreview(); $('addDlg').close(); };
+  $('unpin').onclick = function () { pinned = null; follow = true; lastCenter = null; $('setDlg').close(); };
+  $('modeBtn').onclick = function () {
+    useSim = !useSim; pinned = null; follow = true; lastCenter = null;
+    $('modeBtn').textContent = useSim ? 'Usa il GPS' : 'Simulazione';
+    $('sim').className = useSim ? 'on' : '';
+    $('status').textContent = useSim ? 'Simulazione' : (gps ? 'GPS attivo' : 'In attesa del GPS');
+    if (useSim) { sim.x = -600; map.setView([DEMO.lat, DEMO.lon], 17); }
+    syncMarkers(); tick();
+  };
+  $('simv').oninput = function () { sim.v = +$('simv').value; $('simvl').textContent = sim.v + ' km/h'; };
+  $('exp').onclick = function () {
+    var data = signals.filter(function (s) { return !s.demo && OV.cycle(s); });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
+    a.download = 'semafori-quartu.json'; a.click();
+  };
+  $('imp').onclick = function () { $('file').click(); };
+  $('file').onchange = function () {
+    var f = $('file').files[0]; if (!f) return;
+    var r = new FileReader();
+    r.onload = function () {
+      try {
+        JSON.parse(r.result).forEach(function (n) {
+          var i = signals.findIndex(function (s) { return s.id === n.id; });
+          if (i >= 0) signals[i] = n; else signals.push(n);
+        });
+        save(); updateCount(); syncMarkers();
+      } catch (e) { $('count').textContent = 'File non valido.'; }
+    };
+    r.readAsText(f);
+  };
+
+  // ---- avvio ----
+  startGps();
+  refreshFilterButtons();
+  syncMarkers();
+  if (!signals.some(function (s) { return !s.demo; })) importOsm();
+  setInterval(tick, 1000);
+  tick();
+})();
+
+</script>
+<script>
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  window.addEventListener('load', function () { navigator.serviceWorker.register('./sw.js').catch(function () {}); });
+}
+</script>
+</body>
+</html>
